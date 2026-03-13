@@ -1,39 +1,92 @@
-﻿using System;
+﻿using Serilog;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Management;
 using System.Threading;
-using System.Linq;
+using System.Threading.Tasks;
+using Serilog;
 
 class Program
 {
     static Dictionary<string, long> rules = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
     static Dictionary<int, long> trackedPids = new Dictionary<int, long>();
+    static string configPath = "affinity.ini";
+    static FileSystemWatcher configWatcher;
 
     static void Main()
     {
-        LoadConfig();
-        Console.WriteLine("Affinity Keeper started. (Full Trace Mode)");
+        // --- ログの設定 (ここがログローテーションのキモ) ---
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.Console() // コンソールに出力
+            .WriteTo.File("logs/affinity-keeper-.txt",
+                rollingInterval: RollingInterval.Day,   // 毎日新しいファイルを作成
+                retainedFileCountLimit: 7,              // 7日分だけ保持（ローテーション）
+                fileSizeLimitBytes: 10 * 1024 * 1024,   // 10MBを超えたら分割
+                rollOnFileSizeLimit: true)              // サイズ上限で新しいファイルを作る
+            .CreateLogger();
 
-        // 既存プロセスのスキャン
-        ApplyToExistingProcesses();
+        try
+        {
+            LoadConfig();
+            Log.Information("Affinity Keeper started. (Full Trace Mode)");
 
-        // 新規プロセスの監視開始
-        StartProcessWatcher();
+            ApplyToExistingProcesses();
+            StartConfigWatcher();
+            StartProcessWatcher();
 
-        Thread.Sleep(Timeout.Infinite);
+            Thread.Sleep(Timeout.Infinite);
+        }
+        catch (Exception ex)
+        {
+            Log.Fatal(ex, "Application terminated unexpectedly");
+        }
+        finally
+        {
+            Log.CloseAndFlush(); // ログの書き出しを完了させて終了
+        }
+    }
+
+    static void StartConfigWatcher()
+    {
+        configWatcher = new FileSystemWatcher
+        {
+            Path = AppDomain.CurrentDomain.BaseDirectory,
+            Filter = configPath,
+            NotifyFilter = NotifyFilters.LastWrite
+        };
+
+        configWatcher.Changed += (s, e) =>
+        {
+            // メモ帳などの保存時に複数回イベントが発生するのを防ぐための簡易的な待機
+            Thread.Sleep(500);
+            Log.Information("Configuration change detected. Reloading...");
+
+            lock (rules)
+            {
+                rules.Clear();
+                LoadConfig();
+            }
+            // 新しいルールに基づいて既存プロセスに再適用
+            ApplyToExistingProcesses();
+        };
+
+        configWatcher.EnableRaisingEvents = true;
     }
 
     static void LoadConfig()
     {
-        string path = "affinity.ini";
-        if (!File.Exists(path))
+        //string path = "affinity.ini";
+        if (!File.Exists(configPath))
         {
-            File.WriteAllText(path, "# exe=0-3\n# obs64=0,1,2,3");
+            // File.WriteAllText(path, "# exe=0-3\n# obs64=0,1,2,3");
+            File.WriteAllText(configPath, "# exe=0-3!");
             return;
         }
-
+        /*
         foreach (var line in File.ReadAllLines(path))
         {
             string t = line.Trim();
@@ -44,8 +97,31 @@ class Program
             string exe = parts[0].Trim().Replace(".exe", "");
             long mask = CpuListToMask(parts[1].Trim());
             rules[exe] = mask;
-            Console.WriteLine($"Rule: {exe} -> 0x{mask:X}");
+            // Console.WriteLine($"Rule: {exe} -> 0x{mask:X}");
+            Log.Information("Rule added: {exe} -> 0x{mask:X}", exe, mask);
         }
+        */
+
+        using (var stream = new FileStream(configPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var reader = new StreamReader(stream))
+        {
+            while (!reader.EndOfStream)
+            {
+                string line = reader.ReadLine()?.Trim();
+                if (string.IsNullOrEmpty(line) || line.StartsWith("#")) continue;
+
+                var parts = line.Split('=');
+                if (parts.Length != 2) continue;
+
+                string exe = parts[0].Trim().Replace(".exe", "");
+                long mask = CpuListToMask(parts[1].Trim());
+
+                lock (rules) { rules[exe] = mask; }
+                Log.Information("Rule loaded: {Exe} -> 0x{Mask:X}", exe, mask);
+            }
+        }
+
+
     }
 
     static long CpuListToMask(string text)
@@ -68,7 +144,8 @@ class Program
 
     static void ApplyToExistingProcesses()
     {
-        Console.WriteLine("Scanning existing processes...");
+        // Console.WriteLine("Scanning existing processes...");
+        Log.Information("Scanning existing processes...");
         var allProcesses = Process.GetProcesses().ToList();
         var pidMap = allProcesses.ToDictionary(p => p.Id, p => p.ProcessName);
 
@@ -139,13 +216,15 @@ class Program
         try
         {
             p.ProcessorAffinity = (IntPtr)mask;
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Applied 0x{mask:X} to {p.ProcessName} (PID: {p.Id})");
+            // Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Applied 0x{mask:X} to {p.ProcessName} (PID: {p.Id})");
+            Log.Information("Applied 0x{mask:X} to {ProcessName} (PID: {Pid})", mask, p.ProcessName, p.Id);
         }
         catch (Exception ex)
         {
             // 管理者権限でもアクセスできないシステムプロセスはここで弾かれる
             if (!p.ProcessName.Equals("dwm", StringComparison.OrdinalIgnoreCase))
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Failed: {p.ProcessName} (PID: {p.Id}) - {ex.Message}");
+                // Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Failed: {p.ProcessName} (PID: {p.Id}) - {ex.Message}");
+                Log.Warning("Failed: {ProcessName} (PID: {Pid}) - {Message}", p.ProcessName, p.Id, ex.Message);
         }
     }
 }
