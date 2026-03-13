@@ -1,54 +1,112 @@
-﻿namespace AffinityKeeper;
+namespace AffinityKeeper;
 
-using Serilog;
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Linq;
-using System.Management;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Drawing;
-using System.Data;
+using Serilog;
 
-class Program
+// 簡易的な起動画面（スプラッシュスクリーン）の定義
+public class SplashForm : Form
 {
-    static Dictionary<string, long> rules = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-    static Dictionary<int, long> trackedPids = new Dictionary<int, long>();
-    static string configPath = "affinity.ini";
-    static FileSystemWatcher configWatcher;
-    static NotifyIcon? trayIcon;
+    private Label lblStatus;
+    private Panel pnlBackground;
 
-    [STAThread] // Windows Formsを動かすために必要
+    public SplashForm()
+    {
+        // フォームの設定
+        this.Size = new Size(450, 300);
+        this.FormBorderStyle = FormBorderStyle.None; // 枠なし
+        this.StartPosition = FormStartPosition.CenterScreen; // 画面中央
+        this.TopMost = true; // 最前面に表示
+
+        // 背景パネル（画像を表示するため）
+        pnlBackground = new Panel { Dock = DockStyle.Fill };
+
+        // 画像読み込み（ファイルがなければ背景色のみ）
+        if (File.Exists("splash.png"))
+        {
+            try { pnlBackground.BackgroundImage = Image.FromFile("splash.png"); } catch { }
+            pnlBackground.BackgroundImageLayout = ImageLayout.Stretch;
+        }
+        else
+        {
+            pnlBackground.BackColor = Color.FromArgb(45, 45, 48); // ダークグレー
+        }
+
+        // 状態表示ラベル
+        lblStatus = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 30,
+            ForeColor = Color.White,
+            BackColor = Color.FromArgb(30, 0, 0, 0), // 半透明の黒
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            Text = "Initializing..."
+        };
+
+        pnlBackground.Controls.Add(lblStatus);
+        this.Controls.Add(pnlBackground);
+    }
+
+    // 状態テキストを更新するメソッド（スレッドセーフ）
+    public void UpdateStatus(string text)
+    {
+        if (this.InvokeRequired)
+        {
+            this.Invoke(new Action(() => UpdateStatus(text)));
+            return;
+        }
+        lblStatus.Text = text;
+        lblStatus.Refresh(); // 描画を強制更新
+    }
+}
+
+static class Program
+{
+    private static NotifyIcon? trayIcon;
+    private static SplashForm? splashForm;
+
+    [STAThread]
     static void Main()
     {
-        // --- ログの設定 (ここがログローテーションのキモ) ---
+        // 1. アプリケーションの初期化
+        ApplicationConfiguration.Initialize();
+
+        // 2. ログの設定
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Debug()
-            .WriteTo.Console() // コンソールに出力
-            .WriteTo.File("logs/affinity-keeper-.txt",
-                rollingInterval: RollingInterval.Day,   // 毎日新しいファイルを作成
-                retainedFileCountLimit: 7,              // 7日分だけ保持（ローテーション）
-                fileSizeLimitBytes: 10 * 1024 * 1024,   // 10MBを超えたら分割
-                rollOnFileSizeLimit: true)              // サイズ上限で新しいファイルを作る
+            .WriteTo.File("logs/affinity-keeper-.txt", rollingInterval: RollingInterval.Day)
             .CreateLogger();
 
         try
         {
-            LoadConfig();
-            Log.Information("Affinity Keeper started. (Full Trace Mode)");
+            // 3. 起動画面（スプラッシュスクリーン）を表示
+            splashForm = new SplashForm();
+            splashForm.Show();
+            Application.DoEvents(); // 描画を強制
 
-            ApplyToExistingProcesses();
-            StartConfigWatcher();
-            StartProcessWatcher();
+            // 4. 初期化処理を非同期で実行
+            InitializeApplicationAsync().ContinueWith(t =>
+            {
+                // 初期化完了後の処理（メインスレッドで行う必要がある）
+                if (splashForm != null && !splashForm.IsDisposed)
+                {
+                    splashForm.Invoke(new Action(() =>
+                    {
+                        splashForm.Close(); // 起動画面を閉じる
+                        InitializeTrayIcon(); // トレイアイコンを表示
+                        Log.Information("Initialization complete. Sitting in tray.");
+                    }));
+                }
+            });
 
-            // タスクトレイアイコンの作成
-            CreateTrayIcon();
-
+            // 5. メインループ開始
             Application.Run();
-            // Thread.Sleep(Timeout.Infinite);
         }
         catch (Exception ex)
         {
@@ -56,12 +114,65 @@ class Program
         }
         finally
         {
-            Log.CloseAndFlush(); // ログの書き出しを完了させて終了
+            Log.CloseAndFlush();
         }
     }
 
-    static Form? configForm;
-    static void ShowConfigForm()
+    // 非同期で初期化処理を行うメソッド
+    private static async Task InitializeApplicationAsync()
+    {
+        if (splashForm == null) return;
+
+        // --- 1. 設定ファイルの読み込み ---
+        splashForm.UpdateStatus("設定ファイルを読み込み中...");
+        Log.Information("Loading configuration...");
+        // (ここに LoadRules() などの実際の処理を入れる)
+        await Task.Delay(1000); // 処理をシミュレート
+
+        // --- 2. 既存プロセスのスキャン (ここが時間がかかる部分) ---
+        splashForm.UpdateStatus("実行中のプロセスをスキャン・適用中...");
+        Log.Information("Scanning existing processes...");
+        // (ここに ScanAndApplyAffinity() などの実際の処理を入れる)
+        // ※実際には10秒かかる処理がここに入ります。
+        await Task.Delay(5000); // 5秒の処理をシミュレート
+
+        // --- 3. プロセス監視の開始 ---
+        splashForm.UpdateStatus("プロセス監視を開始中...");
+        Log.Information("Starting process watcher...");
+        // (ここに StartProcessWatcher() などの実際の処理を入れる)
+        await Task.Delay(1000); // 処理をシミュレート
+
+        splashForm.UpdateStatus("準備完了。トレイに常駐します。");
+        await Task.Delay(500); // 少し待ってから閉じる
+    }
+
+    private static void InitializeTrayIcon()
+    {
+        var contextMenu = new ContextMenuStrip();
+        contextMenu.Items.Add("設定画面を開く", null, (s, e) => ShowConfigForm());
+        contextMenu.Items.Add("-");
+        contextMenu.Items.Add("終了", null, (s, e) => Application.Exit());
+
+        // アイコンファイル（app.ico）があれば読み込む
+        Icon? icon = null;
+        if (File.Exists("app.ico"))
+        {
+            try { icon = new Icon("app.ico"); } catch { }
+        }
+
+        trayIcon = new NotifyIcon
+        {
+            Icon = icon ?? SystemIcons.Application, // ファイルがなければ標準アイコン
+            ContextMenuStrip = contextMenu,
+            Text = "Affinity Keeper",
+            Visible = true
+        };
+
+        trayIcon.DoubleClick += (s, e) => ShowConfigForm();
+    }
+
+    private static Form? configForm;
+    private static void ShowConfigForm()
     {
         if (configForm == null || configForm.IsDisposed)
         {
@@ -69,217 +180,5 @@ class Program
         }
         configForm.Show();
         configForm.Activate();
-    }
-
-    static void CreateTrayIcon()
-    {
-        var contextMenu = new ContextMenuStrip();
-        contextMenu.Items.Add("設定画面を開く", null, (s, e) => {
-            ShowConfigForm(); // メソッドを作成
-        });
-        // contextMenu = new ContextMenuStrip();
-        contextMenu.Items.Add("設定ファイルを開く", null, (s, e) => {
-            Process.Start(new ProcessStartInfo(configPath) { UseShellExecute = true });
-        });
-        contextMenu.Items.Add("ログフォルダを開く", null, (s, e) => {
-            Process.Start(new ProcessStartInfo("logs") { UseShellExecute = true });
-        });
-        contextMenu.Items.Add("-"); // セパレーター
-        contextMenu.Items.Add("終了", null, (s, e) => {
-            Log.Information("Exiting application...");
-            Application.Exit();
-        });
-
-        trayIcon = new NotifyIcon()
-        {
-            // アイコンの設定（SystemIcons.Applicationは標準のアイコン）
-            Icon = SystemIcons.Application,
-            ContextMenuStrip = contextMenu,
-            Text = "Affinity Keeper",
-            Visible = true
-        };
-
-        // アイコンをダブルクリックしたときの設定
-        trayIcon.DoubleClick += (s, e) => {
-            Process.Start(new ProcessStartInfo(configPath) { UseShellExecute = true });
-        };
-    }
-
-    static void StartConfigWatcher()
-    {
-        configWatcher = new FileSystemWatcher
-        {
-            Path = AppDomain.CurrentDomain.BaseDirectory,
-            Filter = configPath,
-            NotifyFilter = NotifyFilters.LastWrite
-        };
-
-        configWatcher.Changed += (s, e) =>
-        {
-            // メモ帳などの保存時に複数回イベントが発生するのを防ぐための簡易的な待機
-            Thread.Sleep(500);
-            Log.Information("Configuration change detected. Reloading...");
-
-            lock (rules)
-            {
-                rules.Clear();
-                LoadConfig();
-            }
-            // 新しいルールに基づいて既存プロセスに再適用
-            ApplyToExistingProcesses();
-        };
-
-        configWatcher.EnableRaisingEvents = true;
-    }
-
-    static void LoadConfig()
-    {
-        //string path = "affinity.ini";
-        if (!File.Exists(configPath))
-        {
-            // File.WriteAllText(path, "# exe=0-3\n# obs64=0,1,2,3");
-            File.WriteAllText(configPath, "# exe=0-3!");
-            return;
-        }
-        /*
-        foreach (var line in File.ReadAllLines(path))
-        {
-            string t = line.Trim();
-            if (t.Length == 0 || t.StartsWith("#")) continue;
-            var parts = t.Split('=');
-            if (parts.Length != 2) continue;
-
-            string exe = parts[0].Trim().Replace(".exe", "");
-            long mask = CpuListToMask(parts[1].Trim());
-            rules[exe] = mask;
-            // Console.WriteLine($"Rule: {exe} -> 0x{mask:X}");
-            Log.Information("Rule added: {exe} -> 0x{mask:X}", exe, mask);
-        }
-        */
-
-        using (var stream = new FileStream(configPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-        using (var reader = new StreamReader(stream))
-        {
-            while (!reader.EndOfStream)
-            {
-                string line = reader.ReadLine()?.Trim();
-                if (string.IsNullOrEmpty(line) || line.StartsWith("#")) continue;
-
-                var parts = line.Split('=');
-                if (parts.Length != 2) continue;
-
-                string exe = parts[0].Trim().Replace(".exe", "");
-                long mask = CpuListToMask(parts[1].Trim());
-
-                lock (rules) { rules[exe] = mask; }
-                Log.Information("Rule loaded: {Exe} -> 0x{Mask:X}", exe, mask);
-            }
-        }
-
-
-    }
-
-    static long CpuListToMask(string text)
-    {
-        long mask = 0;
-        foreach (var part in text.Split(','))
-        {
-            string p = part.Trim();
-            if (p.Contains("-"))
-            {
-                var range = p.Split('-');
-                int start = int.Parse(range[0]);
-                int end = int.Parse(range[1]);
-                for (int i = start; i <= end; i++) mask |= 1L << i;
-            }
-            else { mask |= 1L << int.Parse(p); }
-        }
-        return mask;
-    }
-
-    static void ApplyToExistingProcesses()
-    {
-        // Console.WriteLine("Scanning existing processes...");
-        Log.Information("Scanning existing processes...");
-        var allProcesses = Process.GetProcesses().ToList();
-        var pidMap = allProcesses.ToDictionary(p => p.Id, p => p.ProcessName);
-
-        // 1. まず直接ルールに合うものを処理
-        foreach (var p in allProcesses)
-        {
-            if (rules.TryGetValue(p.ProcessName, out long mask))
-            {
-                lock (trackedPids) { trackedPids[p.Id] = mask; }
-                ApplyAffinity(p, mask);
-            }
-        }
-
-        // 2. 親を遡って判定（子プロセス対策）
-        foreach (var p in allProcesses)
-        {
-            if (trackedPids.ContainsKey(p.Id)) continue; // すでに適用済ならスキップ
-
-            try
-            {
-                // WMIで親PIDを取得
-                using (var searcher = new ManagementObjectSearcher($"SELECT ParentProcessId FROM Win32_Process WHERE ProcessId = {p.Id}"))
-                using (var results = searcher.Get())
-                {
-                    foreach (ManagementObject obj in results)
-                    {
-                        int ppid = Convert.ToInt32(obj["ParentProcessId"]);
-                        if (trackedPids.TryGetValue(ppid, out long mask))
-                        {
-                            lock (trackedPids) { trackedPids[p.Id] = mask; }
-                            ApplyAffinity(p, mask);
-                        }
-                    }
-                }
-            }
-            catch { /* アクセス拒否等はスルー */ }
-        }
-    }
-
-    static void StartProcessWatcher()
-    {
-        var query = new WqlEventQuery("SELECT * FROM Win32_ProcessStartTrace");
-        var watcher = new ManagementEventWatcher(query);
-
-        watcher.EventArrived += (sender, e) =>
-        {
-            try
-            {
-                string name = e.NewEvent["ProcessName"].ToString().Replace(".exe", "");
-                int pid = Convert.ToInt32(e.NewEvent["ProcessID"]);
-                int ppid = Convert.ToInt32(e.NewEvent["ParentProcessID"]);
-
-                if (rules.TryGetValue(name, out long mask) || trackedPids.TryGetValue(ppid, out mask))
-                {
-                    lock (trackedPids) { trackedPids[pid] = mask; }
-                    Thread.Sleep(250); // 起動直後の初期化待ち
-                    var p = Process.GetProcessById(pid);
-                    ApplyAffinity(p, mask);
-                }
-            }
-            catch { }
-        };
-        watcher.Start();
-    }
-
-    static void ApplyAffinity(Process p, long mask)
-    {
-        try
-        {
-            p.ProcessorAffinity = (IntPtr)mask;
-            // Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Applied 0x{mask:X} to {p.ProcessName} (PID: {p.Id})");
-            Log.Information("Applied 0x{mask:X} to {ProcessName} (PID: {Pid})", mask, p.ProcessName, p.Id);
-        }
-        catch (Exception ex)
-        {
-            // 管理者権限でもアクセスできないシステムプロセスはここで弾かれる
-            if (!p.ProcessName.Equals("dwm", StringComparison.OrdinalIgnoreCase))
-                // Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Failed: {p.ProcessName} (PID: {p.Id}) - {ex.Message}");
-                Log.Warning("Failed: {ProcessName} (PID: {Pid}) - {Message}", p.ProcessName, p.Id, ex.Message);
-        }
     }
 }

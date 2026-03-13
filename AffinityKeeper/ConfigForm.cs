@@ -1,115 +1,245 @@
-﻿namespace AffinityKeeper;
+namespace AffinityKeeper;
+
+using System;
+using System.Collections.Generic;
+using System.Data;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
+using System.Drawing;
+using System.IO;
+using System.Linq;
+using System.Windows.Forms;
 using Serilog;
 
 public class ConfigForm : Form
 {
-    private ListBox lbRules = new ListBox() { Dock = DockStyle.Fill };
-    private ListBox lbRunning = new ListBox() { Dock = DockStyle.Fill };
-    private TextBox txtCpu = new TextBox() { Text = "0-3", PlaceholderText = "CPU List (ex: 0,1,4-6)" };
-    private Button btnUpdate = new Button { Text = "選択中のルールを更新", Width = 150, Enabled = false };
-    private ComboBox cbPresets = new ComboBox { Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
-    private string presetsPath = "presets.ini";
+    // UIコンポーネント
+    private ListBox lbRules = new ListBox() { Dock = DockStyle.Fill, Font = new Font("Segoe UI", 9) };
+    private ListBox lbRunning = new ListBox() { Dock = DockStyle.Fill, Font = new Font("Segoe UI", 9) };
+    private TextBox txtCpu = new TextBox() { Width = 200, PlaceholderText = "例: 0,1,2,4-6" };
+    private ComboBox cbPresets = new ComboBox { Width = 180, DropDownStyle = ComboBoxStyle.DropDownList };
+    private Label lblStatus = new Label { Text = "● 状態確認中...", ForeColor = Color.Gray, Width = 300, AutoSize = true };
+    private Button btnUpdateRule = new Button { Text = "選択中のルールを更新", Width = 150, Enabled = false };
 
-    // CPUチェックボックスを保持するリスト
     private List<CheckBox> cpuCheckBoxes = new List<CheckBox>();
     private FlowLayoutPanel cpuPanel = new FlowLayoutPanel() { Dock = DockStyle.Fill, AutoScroll = true };
 
+    private readonly string configPath = "affinity.ini";
+    private readonly string presetsDir = "presets";
+    private bool isUpdating = false;
+
     public ConfigForm()
     {
-        var btnSavePreset = new Button { Text = "保存", Width = 50 };
-        var lblPreset = new Label { Text = "プリセット:", Margin = new Padding(0, 5, 0, 0), Width = 60 };
+        this.Text = "Affinity Keeper Settings (Profile Mode)";
+        this.Size = new Size(1000, 750);
+        this.MinimumSize = new Size(800, 600);
 
-        this.Text = "Affinity Keeper Settings";
-        this.Size = new Size(800, 600); // 少し横幅を広げます
+        if (!Directory.Exists(presetsDir)) Directory.CreateDirectory(presetsDir);
 
-        // --- レイアウト構成の修正 ---
-        var mainLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3 };
-        mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-
-        // 行の高さ設定：上段（リスト）は伸びる、中段（CPU）と下段（ボタン）は中身に合わせる
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // 余ったスペースはここが使う
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // CPUパネルは中身に合わせる
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 操作パネルも中身に合わせる
-
-        // 左側：登録済みのルール
-        var leftPanel = new GroupBox { Text = "登録済みのルール", Dock = DockStyle.Fill };
-        leftPanel.Controls.Add(lbRules);
-        mainLayout.Controls.Add(leftPanel, 0, 0);
-
-        // 右側：実行中のプロセス
-        var rightPanel = new GroupBox { Text = "実行中のプロセス (ダブルクリックで追加)", Dock = DockStyle.Fill };
-        rightPanel.Controls.Add(lbRunning);
-        mainLayout.Controls.Add(rightPanel, 1, 0);
-
-        // 中段：CPU選択パネル（タスクマネージャー風）
-        var cpuGroupBox = new GroupBox { Text = "CPU Affinity 選択", Dock = DockStyle.Fill };
-        cpuGroupBox.Controls.Add(cpuPanel);
-        mainLayout.Controls.Add(cpuGroupBox, 0, 1);
-        mainLayout.SetColumnSpan(cpuGroupBox, 2);
-
-        // --- 下部操作パネルの修正 ---
-        var bottomPanel = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            AutoSize = true,              // 中身に合わせて伸びる
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(5)
-        };
-        var btnRemove = new Button { Text = "選択したルールを削除", Width = 150 };
-        var btnRefresh = new Button { Text = "プロセス一覧更新", Width = 120 };
-
-        // ボタン類を配置
-        bottomPanel.Controls.Add(new Label { Text = "プリセット:", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
-        bottomPanel.Controls.Add(cbPresets);
-        bottomPanel.Controls.Add(btnSavePreset);
-        bottomPanel.Controls.Add(new Label { Text = " | ", AutoSize = true, Margin = new Padding(5, 8, 5, 0) });
-        bottomPanel.Controls.Add(new Label { Text = "適用CPU文字列:", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
-        bottomPanel.Controls.Add(txtCpu);
-        bottomPanel.Controls.Add(btnUpdate);
-        bottomPanel.Controls.Add(btnRemove);
-        bottomPanel.Controls.Add(btnRefresh);
-
-        mainLayout.Controls.Add(bottomPanel, 0, 2);
-        mainLayout.SetColumnSpan(bottomPanel, 2);
-
-        this.Controls.Add(mainLayout);
-
-        // CPUチェックボックスの生成
+        InitializeMainLayout();
         InitializeCpuCheckBoxes();
 
-        // イベント登録
-        btnRefresh.Click += (s, e) => RefreshRunningProcesses();
-        btnRemove.Click += (s, e) => RemoveRule();
-        lbRunning.DoubleClick += (s, e) => AddRuleFromRunning();
-        lbRules.SelectedIndexChanged += (s, e) => OnRuleSelected();
-
-        // txtCpuを手動で書き換えた時もチェックボックスに反映させる
-        txtCpu.TextChanged += (s, e) => UpdateChecksFromText();
-
-        // イベント登録
-        btnUpdate.Click += (s, e) => UpdateSelectedRule();
-        lbRules.SelectedIndexChanged += (s, e) => {
-            OnRuleSelected();
-            btnUpdate.Enabled = (lbRules.SelectedItem != null); // 選択中のみ有効化
+        // イベント紐付け
+        txtCpu.TextChanged += (s, e) => {
+            UpdateChecksFromText();
+            // テキストボックスの直接編集はプリセット一致判定に影響しない（保存/更新ボタン押下時に判定）
         };
 
-        // イベント登録
-        btnSavePreset.Click += (s, e) => SaveCurrentAsPreset();
         cbPresets.SelectedIndexChanged += (s, e) => LoadSelectedPreset();
 
+        lbRules.SelectedIndexChanged += (s, e) => {
+            OnRuleSelected();
+            btnUpdateRule.Enabled = (lbRules.SelectedItem != null);
+        };
+
+        // 初期ロード
         RefreshPresets();
         RefreshRules();
         RefreshRunningProcesses();
     }
 
+    private void InitializeMainLayout()
+    {
+        var mainLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1 };
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));  // プリセット操作
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // メインリスト
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 220)); // CPU設定
+
+        // 1. プリセットエリア
+        var presetPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10, 12, 0, 0) };
+        var btnSavePreset = new Button { Text = "現在の構成を保存", Width = 120 };
+        var btnDeletePreset = new Button { Text = "削除", Width = 60 };
+
+        btnSavePreset.Click += (s, e) => SaveCurrentAsPreset();
+        btnDeletePreset.Click += (s, e) => DeletePreset();
+
+        presetPanel.Controls.AddRange(new Control[] {
+            new Label { Text = "プロファイル:", AutoSize = true, Margin = new Padding(0, 5, 5, 0) },
+            cbPresets, btnSavePreset, btnDeletePreset, lblStatus
+        });
+
+        // 2. リストエリア (3カラム)
+        var listLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, Padding = new Padding(5) };
+        listLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
+        listLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));
+        listLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
+
+        // 左: 登録済みルール
+        var btnRemoveRule = new Button { Text = "選択したルールを削除", Dock = DockStyle.Bottom, Height = 30 };
+        btnRemoveRule.Click += (s, e) => RemoveRule();
+        var ruleGroup = new GroupBox { Text = "登録済みルール (affinity.ini)", Dock = DockStyle.Fill };
+        ruleGroup.Controls.Add(lbRules);
+        ruleGroup.Controls.Add(btnRemoveRule);
+
+        // 中央: 追加ボタン
+        var btnAdd = new Button { Text = "◀ 追加", Dock = DockStyle.Fill, Margin = new Padding(0, 100, 0, 100), BackColor = Color.LightSkyBlue };
+        btnAdd.Click += (s, e) => AddRuleFromRunning();
+
+        // 右: 実行中のプロセス
+        var btnRefresh = new Button { Text = "プロセス一覧更新", Dock = DockStyle.Bottom, Height = 30 };
+        btnRefresh.Click += (s, e) => RefreshRunningProcesses();
+        var runningGroup = new GroupBox { Text = "実行中のプロセス (ダブルクリックで追加)", Dock = DockStyle.Fill };
+        runningGroup.Controls.Add(lbRunning);
+        runningGroup.Controls.Add(btnRefresh);
+        lbRunning.DoubleClick += (s, e) => AddRuleFromRunning();
+
+        listLayout.Controls.Add(ruleGroup, 0, 0);
+        listLayout.Controls.Add(btnAdd, 1, 0);
+        listLayout.Controls.Add(runningGroup, 2, 0);
+
+        // 3. Affinity設定エリア
+        var affinityGroup = new GroupBox { Text = "Affinity詳細設定", Dock = DockStyle.Fill, Padding = new Padding(10) };
+        var affinityInner = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1 };
+        affinityInner.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        affinityInner.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
+
+        var bottomAction = new FlowLayoutPanel { Dock = DockStyle.Fill };
+        btnUpdateRule.Click += (s, e) => UpdateSelectedRule();
+        bottomAction.Controls.AddRange(new Control[] {
+            new Label { Text = "適用CPU文字列:", AutoSize = true, Margin = new Padding(0, 8, 5, 0) },
+            txtCpu, btnUpdateRule
+        });
+
+        affinityInner.Controls.Add(cpuPanel, 0, 0);
+        affinityInner.Controls.Add(bottomAction, 0, 1);
+        affinityGroup.Controls.Add(affinityInner);
+
+        mainLayout.Controls.Add(presetPanel, 0, 0);
+        mainLayout.Controls.Add(listLayout, 0, 1);
+        mainLayout.Controls.Add(affinityGroup, 0, 2);
+
+        this.Controls.Add(mainLayout);
+    }
+
+    // --- ロジック：正規化と比較 ---
+
+    private string NormalizeAffinity(string input)
+    {
+        var cores = new HashSet<int>();
+        foreach (var part in input.Split(','))
+        {
+            string p = part.Trim();
+            if (p.Contains("-"))
+            {
+                var r = p.Split('-');
+                if (r.Length == 2 && int.TryParse(r[0], out int s) && int.TryParse(r[1], out int e))
+                    for (int i = s; i <= e; i++) cores.Add(i);
+            }
+            else if (int.TryParse(p, out int v)) cores.Add(v);
+        }
+        return string.Join(",", cores.OrderBy(n => n));
+    }
+
+    private void CheckPresetMatch()
+    {
+        if (isUpdating) return;
+
+        // 現在のリストボックス（affinity.iniの状態）をシリアライズ
+        var currentRules = lbRules.Items.Cast<string>()
+            .Select(line => {
+                var p = line.Split('=');
+                return p.Length == 2 ? $"{p[0].Trim().ToLower()}={NormalizeAffinity(p[1])}" : "";
+            })
+            .Where(s => !string.IsNullOrEmpty(s))
+            .OrderBy(s => s)
+            .ToList();
+
+        string currentContent = string.Join("\n", currentRules);
+        string? foundName = null;
+
+        foreach (var file in Directory.GetFiles(presetsDir, "*.ini"))
+        {
+            var presetRules = File.ReadAllLines(file)
+                .Select(line => {
+                    var p = line.Split('=');
+                    return p.Length == 2 ? $"{p[0].Trim().ToLower()}={NormalizeAffinity(p[1])}" : "";
+                })
+                .Where(s => !string.IsNullOrEmpty(s))
+                .OrderBy(s => s)
+                .ToList();
+
+            if (currentContent == string.Join("\n", presetRules))
+            {
+                foundName = Path.GetFileNameWithoutExtension(file);
+                break;
+            }
+        }
+
+        isUpdating = true;
+        if (foundName != null)
+        {
+            lblStatus.Text = $"● 構成一致: {foundName}";
+            lblStatus.ForeColor = Color.Green;
+            cbPresets.SelectedItem = foundName;
+        }
+        else
+        {
+            lblStatus.Text = "● 未保存の構成 (カスタム)";
+            lblStatus.ForeColor = Color.Orange;
+            cbPresets.SelectedIndex = -1;
+        }
+        isUpdating = false;
+    }
+
+    // --- 各種操作 ---
+
+    private void SaveCurrentAsPreset()
+    {
+        string name = Microsoft.VisualBasic.Interaction.InputBox("プロファイル名を入力してください", "プリセット保存", "MyProfile").Trim();
+        if (string.IsNullOrEmpty(name)) return;
+
+        string path = Path.Combine(presetsDir, name + ".ini");
+        File.WriteAllLines(path, lbRules.Items.Cast<string>());
+
+        RefreshPresets();
+        CheckPresetMatch();
+    }
+
+    private void LoadSelectedPreset()
+    {
+        if (isUpdating || cbPresets.SelectedItem == null) return;
+        string path = Path.Combine(presetsDir, cbPresets.SelectedItem.ToString() + ".ini");
+        if (File.Exists(path))
+        {
+            File.Copy(path, configPath, true);
+            RefreshRules(); // これにより CheckPresetMatch も呼ばれる
+        }
+    }
+
+    private void DeletePreset()
+    {
+        if (cbPresets.SelectedItem == null) return;
+        if (MessageBox.Show("このプリセットを削除しますか？", "確認", MessageBoxButtons.YesNo) == DialogResult.Yes)
+        {
+            File.Delete(Path.Combine(presetsDir, cbPresets.SelectedItem.ToString() + ".ini"));
+            RefreshPresets();
+            CheckPresetMatch();
+        }
+    }
+
     private void InitializeCpuCheckBoxes()
     {
-        int cpuCount = Environment.ProcessorCount;
-        for (int i = 0; i < cpuCount; i++)
+        cpuPanel.Controls.Clear();
+        for (int i = 0; i < Environment.ProcessorCount; i++)
         {
             var cb = new CheckBox { Text = $"CPU {i}", Width = 70, Tag = i };
             cb.CheckedChanged += (s, e) => UpdateTextFromChecks();
@@ -118,168 +248,81 @@ public class ConfigForm : Form
         }
     }
 
-    // チェックボックスの状態から "0,1,2-4" 形式の文字列を生成
-    private bool isUpdating = false;
     private void UpdateTextFromChecks()
     {
         if (isUpdating) return;
         isUpdating = true;
-
-        var selectedCores = cpuCheckBoxes.Where(cb => cb.Checked).Select(cb => (int)cb.Tag).ToList();
-        txtCpu.Text = ConvertListToRangeString(selectedCores);
-
+        var selected = cpuCheckBoxes.Where(c => c.Checked).Select(c => (int)c.Tag).OrderBy(n => n);
+        txtCpu.Text = string.Join(",", selected);
         isUpdating = false;
     }
 
-    // 文字列からチェックボックスの状態を復元
     private void UpdateChecksFromText()
     {
         if (isUpdating) return;
         isUpdating = true;
-
-        var cores = ParseRangeString(txtCpu.Text);
-        foreach (var cb in cpuCheckBoxes)
-        {
-            cb.Checked = cores.Contains((int)cb.Tag);
-        }
-
+        var cores = NormalizeAffinity(txtCpu.Text).Split(',').Select(s => int.TryParse(s, out int v) ? v : -1).ToHashSet();
+        foreach (var cb in cpuCheckBoxes) cb.Checked = cores.Contains((int)cb.Tag);
         isUpdating = false;
     }
 
-    // 左側のリストでルールを選択した時
+    private void RefreshPresets()
+    {
+        isUpdating = true;
+        cbPresets.Items.Clear();
+        foreach (var f in Directory.GetFiles(presetsDir, "*.ini"))
+            cbPresets.Items.Add(Path.GetFileNameWithoutExtension(f));
+        isUpdating = false;
+    }
+
+    private void RefreshRules()
+    {
+        lbRules.Items.Clear();
+        if (File.Exists(configPath))
+            lbRules.Items.AddRange(File.ReadAllLines(configPath).Where(l => !l.StartsWith("#") && !string.IsNullOrWhiteSpace(l)).ToArray());
+        CheckPresetMatch();
+    }
+
+    private void RefreshRunningProcesses()
+    {
+        lbRunning.Items.Clear();
+        lbRunning.Items.AddRange(Process.GetProcesses().Select(p => p.ProcessName).Distinct().OrderBy(n => n).ToArray());
+    }
+
     private void OnRuleSelected()
     {
         if (lbRules.SelectedItem == null) return;
-        string line = lbRules.SelectedItem.ToString();
-        var parts = line.Split('=');
-        if (parts.Length == 2)
-        {
-            txtCpu.Text = parts[1]; // 文字列を入れると UpdateChecksFromText が走る
-        }
+        var parts = lbRules.SelectedItem.ToString()!.Split('=');
+        if (parts.Length == 2) txtCpu.Text = NormalizeAffinity(parts[1]);
     }
 
-    // ヘルパー：リストを "0,1,3-5" 形式に変換
-    private string ConvertListToRangeString(List<int> cores)
+    private void AddRuleFromRunning()
     {
-        if (!cores.Any()) return "";
-        cores.Sort();
-        var ranges = new List<string>();
-        for (int i = 0, j = 0; i < cores.Count; i = j)
-        {
-            for (j = i + 1; j < cores.Count && cores[j] == cores[j - 1] + 1; j++) ;
-            ranges.Add(j - i > 1 ? $"{cores[i]}-{cores[j - 1]}" : cores[i].ToString());
-        }
-        return string.Join(",", ranges);
-    }
-
-    // ヘルパー： "0,1,3-5" 形式をリストに変換
-    private HashSet<int> ParseRangeString(string text)
-    {
-        var result = new HashSet<int>();
-        foreach (var part in text.Split(','))
-        {
-            if (part.Contains("-"))
-            {
-                var range = part.Split('-');
-                if (int.TryParse(range[0], out int start) && int.TryParse(range[1], out int end))
-                    for (int i = start; i <= end; i++) result.Add(i);
-            }
-            else if (int.TryParse(part, out int val)) result.Add(val);
-        }
-        return result;
+        if (lbRunning.SelectedItem == null) return;
+        string name = lbRunning.SelectedItem.ToString()!;
+        var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
+        lines.RemoveAll(l => l.StartsWith(name + "="));
+        lines.Add($"{name}={NormalizeAffinity(txtCpu.Text)}");
+        File.WriteAllLines(configPath, lines);
+        RefreshRules();
     }
 
     private void UpdateSelectedRule()
     {
         if (lbRules.SelectedItem == null) return;
-
-        // 現在選択されている行 (例: "opera=0-3") からプロセス名を取り出す
-        string selectedLine = lbRules.SelectedItem.ToString();
-        string procName = selectedLine.Split('=')[0].Trim();
-
-        if (string.IsNullOrEmpty(procName)) return;
-
-        // ファイルを読み込んで該当行を置換
-        var lines = File.Exists("affinity.ini") ? File.ReadAllLines("affinity.ini").ToList() : new List<string>();
-
-        // 既存のルールを検索して置換（あるいは削除して追加）
-        bool found = false;
+        string name = lbRules.SelectedItem.ToString()!.Split('=')[0].Trim();
+        var lines = File.ReadAllLines(configPath).ToList();
         for (int i = 0; i < lines.Count; i++)
-        {
-            if (lines[i].StartsWith(procName + "="))
-            {
-                lines[i] = $"{procName}={txtCpu.Text}";
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) lines.Add($"{procName}={txtCpu.Text}");
-
-        File.WriteAllLines("affinity.ini", lines);
-
-        // 選択状態を維持しつつリストを更新
-        int currentIndex = lbRules.SelectedIndex;
+            if (lines[i].StartsWith(name + "=")) lines[i] = $"{name}={NormalizeAffinity(txtCpu.Text)}";
+        File.WriteAllLines(configPath, lines);
         RefreshRules();
-        if (lbRules.Items.Count > currentIndex) lbRules.SelectedIndex = currentIndex;
-
-        Log.Information("Rule updated: {Exe} -> {Mask}", procName, txtCpu.Text);
     }
 
-    private void RefreshPresets()
+    private void RemoveRule()
     {
-        cbPresets.Items.Clear();
-        if (!File.Exists(presetsPath)) return;
-
-        var lines = File.ReadAllLines(presetsPath);
-        foreach (var line in lines)
-        {
-            var parts = line.Split('=');
-            if (parts.Length == 2) cbPresets.Items.Add(parts[0].Trim());
-        }
+        if (lbRules.SelectedItem == null) return;
+        var lines = File.ReadAllLines(configPath).Where(l => l != lbRules.SelectedItem.ToString()).ToList();
+        File.WriteAllLines(configPath, lines);
+        RefreshRules();
     }
-
-    private void SaveCurrentAsPreset()
-    {
-        if (string.IsNullOrWhiteSpace(txtCpu.Text)) return;
-
-        // 簡易的な名前入力ダイアログを表示
-        string presetName = Microsoft.VisualBasic.Interaction.InputBox(
-            "プリセット名を入力してください", "プリセット保存", "New Preset");
-
-        if (string.IsNullOrWhiteSpace(presetName)) return;
-
-        var lines = File.Exists(presetsPath) ? File.ReadAllLines(presetsPath).ToList() : new List<string>();
-        lines.RemoveAll(l => l.StartsWith(presetName + "="));
-        lines.Add($"{presetName}={txtCpu.Text}");
-
-        File.WriteAllLines(presetsPath, lines);
-        RefreshPresets();
-        cbPresets.SelectedItem = presetName;
-
-        Log.Information("Preset saved: {Name} = {Mask}", presetName, txtCpu.Text);
-    }
-
-    private void LoadSelectedPreset()
-    {
-        if (cbPresets.SelectedItem == null) return;
-        string selectedName = cbPresets.SelectedItem.ToString();
-
-        var lines = File.ReadAllLines(presetsPath);
-        foreach (var line in lines)
-        {
-            var parts = line.Split('=');
-            if (parts.Length == 2 && parts[0].Trim() == selectedName)
-            {
-                txtCpu.Text = parts[1].Trim(); // これでチェックボックスも自動連動します
-                break;
-            }
-        }
-    }
-
-    // --- 以降、RefreshRules, RefreshRunningProcesses, AddRuleFromRunning, RemoveRule は既存と同じ ---
-    private void RefreshRules() { /* ...省略... */ lbRules.Items.Clear(); if (File.Exists("affinity.ini")) lbRules.Items.AddRange(File.ReadAllLines("affinity.ini").Where(l => !l.StartsWith("#") && !string.IsNullOrWhiteSpace(l)).ToArray()); }
-    private void RefreshRunningProcesses() { lbRunning.Items.Clear(); var processes = Process.GetProcesses().Select(p => p.ProcessName).Distinct().OrderBy(n => n); lbRunning.Items.AddRange(processes.ToArray()); }
-    private void AddRuleFromRunning() { if (lbRunning.SelectedItem == null) return; string procName = lbRunning.SelectedItem.ToString(); string newRule = $"{procName}={txtCpu.Text}"; var lines = File.Exists("affinity.ini") ? File.ReadAllLines("affinity.ini").ToList() : new List<string>(); lines.RemoveAll(l => l.StartsWith(procName + "=")); lines.Add(newRule); File.WriteAllLines("affinity.ini", lines); RefreshRules(); }
-    private void RemoveRule() { if (lbRules.SelectedItem == null) return; string selected = lbRules.SelectedItem.ToString(); var lines = File.ReadAllLines("affinity.ini").ToList(); lines.Remove(selected); File.WriteAllLines("affinity.ini", lines); RefreshRules(); }
 }

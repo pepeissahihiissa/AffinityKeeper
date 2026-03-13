@@ -1,5 +1,19 @@
-*
-!AffinityKeeper/
-!AffinityKeeper/Program.cs
-!AffinityKeeper/ConfigForm.cs
-!.gitignore
+## Visual Studio ツールの一時ファイル
+.vs/
+[Bb]in/
+[Oo]bj/
+[Pp]roperties/
+out/
+publish/
+
+## ユーザー固有設定
+*.user
+*.userosscache
+*.sln.docstates
+
+## ログファイル
+logs/
+*.log
+
+## その他
+.DS_Store
