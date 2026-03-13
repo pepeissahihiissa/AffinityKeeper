@@ -77,7 +77,7 @@ class Program
         contextMenu.Items.Add("設定画面を開く", null, (s, e) => {
             ShowConfigForm(); // メソッドを作成
         });
-        contextMenu = new ContextMenuStrip();
+        // contextMenu = new ContextMenuStrip();
         contextMenu.Items.Add("設定ファイルを開く", null, (s, e) => {
             Process.Start(new ProcessStartInfo(configPath) { UseShellExecute = true });
         });
