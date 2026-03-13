@@ -9,6 +9,8 @@ public class ConfigForm : Form
     private ListBox lbRunning = new ListBox() { Dock = DockStyle.Fill };
     private TextBox txtCpu = new TextBox() { Text = "0-3", PlaceholderText = "CPU List (ex: 0,1,4-6)" };
     private Button btnUpdate = new Button { Text = "選択中のルールを更新", Width = 150, Enabled = false };
+    private ComboBox cbPresets = new ComboBox { Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
+    private string presetsPath = "presets.ini";
 
     // CPUチェックボックスを保持するリスト
     private List<CheckBox> cpuCheckBoxes = new List<CheckBox>();
@@ -16,6 +18,9 @@ public class ConfigForm : Form
 
     public ConfigForm()
     {
+        var btnSavePreset = new Button { Text = "保存", Width = 50 };
+        var lblPreset = new Label { Text = "プリセット:", Margin = new Padding(0, 5, 0, 0), Width = 60 };
+
         this.Text = "Affinity Keeper Settings";
         this.Size = new Size(800, 600); // 少し横幅を広げます
 
@@ -47,6 +52,10 @@ public class ConfigForm : Form
         var bottomPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight };
         var btnRemove = new Button { Text = "選択したルールを削除", Width = 150 };
         var btnRefresh = new Button { Text = "プロセス一覧更新", Width = 120 };
+        bottomPanel.Controls.Add(lblPreset);
+        bottomPanel.Controls.Add(cbPresets);
+        bottomPanel.Controls.Add(btnSavePreset);
+        bottomPanel.Controls.Add(new Label { Text = " | ", Width = 20 }); // 区切り
         bottomPanel.Controls.Add(new Label { Text = "適用CPU文字列:", Margin = new Padding(0, 5, 0, 0) });
         bottomPanel.Controls.Add(txtCpu);
         bottomPanel.Controls.Add(btnUpdate);
@@ -76,6 +85,11 @@ public class ConfigForm : Form
             btnUpdate.Enabled = (lbRules.SelectedItem != null); // 選択中のみ有効化
         };
 
+        // イベント登録
+        btnSavePreset.Click += (s, e) => SaveCurrentAsPreset();
+        cbPresets.SelectedIndexChanged += (s, e) => LoadSelectedPreset();
+
+        RefreshPresets();
         RefreshRules();
         RefreshRunningProcesses();
     }
@@ -198,6 +212,57 @@ public class ConfigForm : Form
         if (lbRules.Items.Count > currentIndex) lbRules.SelectedIndex = currentIndex;
 
         Log.Information("Rule updated: {Exe} -> {Mask}", procName, txtCpu.Text);
+    }
+
+    private void RefreshPresets()
+    {
+        cbPresets.Items.Clear();
+        if (!File.Exists(presetsPath)) return;
+
+        var lines = File.ReadAllLines(presetsPath);
+        foreach (var line in lines)
+        {
+            var parts = line.Split('=');
+            if (parts.Length == 2) cbPresets.Items.Add(parts[0].Trim());
+        }
+    }
+
+    private void SaveCurrentAsPreset()
+    {
+        if (string.IsNullOrWhiteSpace(txtCpu.Text)) return;
+
+        // 簡易的な名前入力ダイアログを表示
+        string presetName = Microsoft.VisualBasic.Interaction.InputBox(
+            "プリセット名を入力してください", "プリセット保存", "New Preset");
+
+        if (string.IsNullOrWhiteSpace(presetName)) return;
+
+        var lines = File.Exists(presetsPath) ? File.ReadAllLines(presetsPath).ToList() : new List<string>();
+        lines.RemoveAll(l => l.StartsWith(presetName + "="));
+        lines.Add($"{presetName}={txtCpu.Text}");
+
+        File.WriteAllLines(presetsPath, lines);
+        RefreshPresets();
+        cbPresets.SelectedItem = presetName;
+
+        Log.Information("Preset saved: {Name} = {Mask}", presetName, txtCpu.Text);
+    }
+
+    private void LoadSelectedPreset()
+    {
+        if (cbPresets.SelectedItem == null) return;
+        string selectedName = cbPresets.SelectedItem.ToString();
+
+        var lines = File.ReadAllLines(presetsPath);
+        foreach (var line in lines)
+        {
+            var parts = line.Split('=');
+            if (parts.Length == 2 && parts[0].Trim() == selectedName)
+            {
+                txtCpu.Text = parts[1].Trim(); // これでチェックボックスも自動連動します
+                break;
+            }
+        }
     }
 
     // --- 以降、RefreshRules, RefreshRunningProcesses, AddRuleFromRunning, RemoveRule は既存と同じ ---
