@@ -1,4 +1,5 @@
 *
 !AffinityKeeper/
 !AffinityKeeper/Program.cs
+!AffinityKeeper/ConfigForm.cs
 !.gitignore

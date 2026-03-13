@@ -1,4 +1,6 @@
-﻿using Serilog;
+﻿namespace AffinityKeeper;
+
+using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -7,7 +9,9 @@ using System.Linq;
 using System.Management;
 using System.Threading;
 using System.Threading.Tasks;
-using Serilog;
+using System.Windows.Forms;
+using System.Drawing;
+using System.Data;
 
 class Program
 {
@@ -15,7 +19,9 @@ class Program
     static Dictionary<int, long> trackedPids = new Dictionary<int, long>();
     static string configPath = "affinity.ini";
     static FileSystemWatcher configWatcher;
+    static NotifyIcon? trayIcon;
 
+    [STAThread] // Windows Formsを動かすために必要
     static void Main()
     {
         // --- ログの設定 (ここがログローテーションのキモ) ---
@@ -38,7 +44,11 @@ class Program
             StartConfigWatcher();
             StartProcessWatcher();
 
-            Thread.Sleep(Timeout.Infinite);
+            // タスクトレイアイコンの作成
+            CreateTrayIcon();
+
+            Application.Run();
+            // Thread.Sleep(Timeout.Infinite);
         }
         catch (Exception ex)
         {
@@ -48,6 +58,51 @@ class Program
         {
             Log.CloseAndFlush(); // ログの書き出しを完了させて終了
         }
+    }
+
+    static Form? configForm;
+    static void ShowConfigForm()
+    {
+        if (configForm == null || configForm.IsDisposed)
+        {
+            configForm = new ConfigForm();
+        }
+        configForm.Show();
+        configForm.Activate();
+    }
+
+    static void CreateTrayIcon()
+    {
+        var contextMenu = new ContextMenuStrip();
+        contextMenu.Items.Add("設定画面を開く", null, (s, e) => {
+            ShowConfigForm(); // メソッドを作成
+        });
+        contextMenu = new ContextMenuStrip();
+        contextMenu.Items.Add("設定ファイルを開く", null, (s, e) => {
+            Process.Start(new ProcessStartInfo(configPath) { UseShellExecute = true });
+        });
+        contextMenu.Items.Add("ログフォルダを開く", null, (s, e) => {
+            Process.Start(new ProcessStartInfo("logs") { UseShellExecute = true });
+        });
+        contextMenu.Items.Add("-"); // セパレーター
+        contextMenu.Items.Add("終了", null, (s, e) => {
+            Log.Information("Exiting application...");
+            Application.Exit();
+        });
+
+        trayIcon = new NotifyIcon()
+        {
+            // アイコンの設定（SystemIcons.Applicationは標準のアイコン）
+            Icon = SystemIcons.Application,
+            ContextMenuStrip = contextMenu,
+            Text = "Affinity Keeper",
+            Visible = true
+        };
+
+        // アイコンをダブルクリックしたときの設定
+        trayIcon.DoubleClick += (s, e) => {
+            Process.Start(new ProcessStartInfo(configPath) { UseShellExecute = true });
+        };
     }
 
     static void StartConfigWatcher()
