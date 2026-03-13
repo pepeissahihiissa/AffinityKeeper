@@ -24,13 +24,15 @@ public class ConfigForm : Form
         this.Text = "Affinity Keeper Settings";
         this.Size = new Size(800, 600); // 少し横幅を広げます
 
-        // レイアウト構成
+        // --- レイアウト構成の修正 ---
         var mainLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3 };
         mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 40)); // 上段：リスト
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 120)); // 中段：CPUパネル
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));  // 下段：操作パネル
+
+        // 行の高さ設定：上段（リスト）は伸びる、中段（CPU）と下段（ボタン）は中身に合わせる
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // 余ったスペースはここが使う
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // CPUパネルは中身に合わせる
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 操作パネルも中身に合わせる
 
         // 左側：登録済みのルール
         var leftPanel = new GroupBox { Text = "登録済みのルール", Dock = DockStyle.Fill };
@@ -48,19 +50,29 @@ public class ConfigForm : Form
         mainLayout.Controls.Add(cpuGroupBox, 0, 1);
         mainLayout.SetColumnSpan(cpuGroupBox, 2);
 
-        // 下部：操作パネル
-        var bottomPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight };
+        // --- 下部操作パネルの修正 ---
+        var bottomPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,              // 中身に合わせて伸びる
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(5)
+        };
         var btnRemove = new Button { Text = "選択したルールを削除", Width = 150 };
         var btnRefresh = new Button { Text = "プロセス一覧更新", Width = 120 };
-        bottomPanel.Controls.Add(lblPreset);
+
+        // ボタン類を配置
+        bottomPanel.Controls.Add(new Label { Text = "プリセット:", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
         bottomPanel.Controls.Add(cbPresets);
         bottomPanel.Controls.Add(btnSavePreset);
-        bottomPanel.Controls.Add(new Label { Text = " | ", Width = 20 }); // 区切り
-        bottomPanel.Controls.Add(new Label { Text = "適用CPU文字列:", Margin = new Padding(0, 5, 0, 0) });
+        bottomPanel.Controls.Add(new Label { Text = " | ", AutoSize = true, Margin = new Padding(5, 8, 5, 0) });
+        bottomPanel.Controls.Add(new Label { Text = "適用CPU文字列:", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
         bottomPanel.Controls.Add(txtCpu);
         bottomPanel.Controls.Add(btnUpdate);
         bottomPanel.Controls.Add(btnRemove);
         bottomPanel.Controls.Add(btnRefresh);
+
         mainLayout.Controls.Add(bottomPanel, 0, 2);
         mainLayout.SetColumnSpan(bottomPanel, 2);
 
