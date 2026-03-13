@@ -2,6 +2,7 @@
 
 プロセスのCPUアフィニティ（使用コア）を自動的に監視・固定するツールです。
 特定のプロセスが特定のコアを専有するように設定したり、Eコアを避けてPコアのみに割り当てたりすることが可能です。
+<img width="986" height="743" alt="AffinityKeeper_UA3HF3x3LT_モザイク" src="https://github.com/user-attachments/assets/200438c8-49ac-4d2e-920d-c4decc2b8ac1" />
 
 ## 主な機能
 - **自動常駐監視**: 起動したプロセスを検知し、設定されたアフィニティを即座に適用します。
