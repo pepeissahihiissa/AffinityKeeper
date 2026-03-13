@@ -9,7 +9,7 @@
 - **直感的なUI**: CPUコアごとのチェックボックスで簡単に割り当てを変更できます。
 
 ## インストール・実行方法
-1. [Releases](https://github.com/あなたのユーザー名/AffinityKeeper/releases) から最新の `AffinityKeeper_beta1.zip` をダウンロードします。
+1. [Releases](https://github.com/pepeissahihiissa/AffinityKeeper/releases) から最新の `AffinityKeeper_beta1.zip` をダウンロードします。
 2. 任意のフォルダに展開してください。
 3. `AffinityKeeper.exe` を実行するとタスクトレイに常駐します。
 
