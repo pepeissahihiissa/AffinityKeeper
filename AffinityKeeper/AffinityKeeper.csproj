@@ -13,12 +13,8 @@
 	  <ImplicitUsings>enable</ImplicitUsings>
 	  <Nullable>enable</Nullable>
       <ApplicationManifest>app.manifest</ApplicationManifest>
-      <ApplicationIcon>foricon.ico</ApplicationIcon>
+      <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
-
-  <ItemGroup>
-    <Content Include="foricon.ico" />
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Serilog" Version="4.3.1" />
@@ -28,7 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="foricon.ico">
+    <None Update="app.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="splash.png">

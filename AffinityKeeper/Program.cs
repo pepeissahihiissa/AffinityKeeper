@@ -74,47 +74,57 @@ static class Program
     [STAThread]
     static void Main()
     {
-        // 1. アプリケーションの初期化
-        ApplicationConfiguration.Initialize();
-
-        // 2. ログの設定
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Debug()
-            .WriteTo.File("logs/affinity-keeper-.txt", rollingInterval: RollingInterval.Day)
-            .CreateLogger();
-
-        try
+        // アプリ固有の名前でMutexを作成
+        using (Mutex mutex = new Mutex(false, "AffinityKeeper_SingleInstance_Mutex"))
         {
-            // 3. 起動画面（スプラッシュスクリーン）を表示
-            splashForm = new SplashForm();
-            splashForm.Show();
-            Application.DoEvents(); // 描画を強制
-
-            // 4. 初期化処理を非同期で実行
-            InitializeApplicationAsync().ContinueWith(t =>
+            // 他のインスタンスが既に動いているかチェック
+            if (!mutex.WaitOne(0, false))
             {
-                // 初期化完了後の処理（メインスレッドで行う必要がある）
-                if (splashForm != null && !splashForm.IsDisposed)
-                {
-                    splashForm.Invoke(new Action(() =>
-                    {
-                        splashForm.Close(); // 起動画面を閉じる
-                        InitializeTrayIcon(); // トレイアイコンを表示
-                        Log.Information("Initialization complete. Sitting in tray.");
-                    }));
-                }
-            });
+                MessageBox.Show("Affinity Keeperは既に起動しています。", "二重起動チェック", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+                return;
+            }
+            // 1. アプリケーションの初期化
+            ApplicationConfiguration.Initialize();
 
-            // 5. メインループ開始
-            Application.Run();
-        }
-        catch (Exception ex)
-        {
-            Log.Fatal(ex, "Application terminated unexpectedly");
-        }
-        finally
-        {
-            Log.CloseAndFlush();
+            // 2. ログの設定
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Debug()
+                .WriteTo.File("logs/affinity-keeper-.txt", rollingInterval: RollingInterval.Day)
+                .CreateLogger();
+
+            try
+            {
+                // 3. 起動画面（スプラッシュスクリーン）を表示
+                splashForm = new SplashForm();
+                splashForm.Show();
+                Application.DoEvents(); // 描画を強制
+
+                // 4. 初期化処理を非同期で実行
+                InitializeApplicationAsync().ContinueWith(t =>
+                {
+                    // 初期化完了後の処理（メインスレッドで行う必要がある）
+                    if (splashForm != null && !splashForm.IsDisposed)
+                    {
+                        splashForm.Invoke(new Action(() =>
+                        {
+                            splashForm.Close(); // 起動画面を閉じる
+                            InitializeTrayIcon(); // トレイアイコンを表示
+                            Log.Information("Initialization complete. Sitting in tray.");
+                        }));
+                    }
+                });
+
+                // 5. メインループ開始
+                Application.Run();
+            }
+            catch (Exception ex)
+            {
+                Log.Fatal(ex, "Application terminated unexpectedly");
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+            }
         }
     }
 
