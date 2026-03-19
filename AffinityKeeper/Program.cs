@@ -23,7 +23,7 @@ public class SplashForm : Form
         this.Size = new Size(450, 300);
         this.FormBorderStyle = FormBorderStyle.None;
         this.StartPosition = FormStartPosition.CenterScreen;
-        this.TopMost = true;
+        // this.TopMost = true;
 
         pnlBackground = new Panel { Dock = DockStyle.Fill };
         if (File.Exists("splash.png"))

@@ -60,67 +60,62 @@ public class ConfigForm : Form
     private void InitializeMainLayout()
     {
         var mainLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1 };
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));  // プリセット操作
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // メインリスト
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 220)); // CPU設定
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 240)); // 少し広げました
 
         // 1. プリセットエリア
         var presetPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10, 12, 0, 0) };
-        var btnSavePreset = new Button { Text = "現在の構成を保存", Width = 120 };
+        var btnSavePreset = new Button { Text = "構成を保存", Width = 100 };
         var btnDeletePreset = new Button { Text = "削除", Width = 60 };
-
         btnSavePreset.Click += (s, e) => SaveCurrentAsPreset();
         btnDeletePreset.Click += (s, e) => DeletePreset();
+        presetPanel.Controls.AddRange(new Control[] { new Label { Text = "プロファイル:", AutoSize = true }, cbPresets, btnSavePreset, btnDeletePreset, lblStatus });
 
-        presetPanel.Controls.AddRange(new Control[] {
-            new Label { Text = "プロファイル:", AutoSize = true, Margin = new Padding(0, 5, 5, 0) },
-            cbPresets, btnSavePreset, btnDeletePreset, lblStatus
-        });
-
-        // 2. リストエリア (3カラム)
+        // 2. リストエリア
         var listLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, Padding = new Padding(5) };
         listLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
         listLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));
         listLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
 
-        // 左: 登録済みルール
-        var btnRemoveRule = new Button { Text = "選択したルールを削除", Dock = DockStyle.Bottom, Height = 30 };
-        btnRemoveRule.Click += (s, e) => RemoveRule();
-        var ruleGroup = new GroupBox { Text = "登録済みルール (affinity.ini)", Dock = DockStyle.Fill };
+        var btnRemoveRule = new Button { Text = "ルールを削除してAffinityリセット", Dock = DockStyle.Bottom, Height = 35, BackColor = Color.MistyRose };
+        btnRemoveRule.Click += (s, e) => RemoveRuleAndResetAffinity(); // 変更点
+
+        var ruleGroup = new GroupBox { Text = "登録済みルール", Dock = DockStyle.Fill };
         ruleGroup.Controls.Add(lbRules);
         ruleGroup.Controls.Add(btnRemoveRule);
 
-        // 中央: 追加ボタン
         var btnAdd = new Button { Text = "◀ 追加", Dock = DockStyle.Fill, Margin = new Padding(0, 100, 0, 100), BackColor = Color.LightSkyBlue };
         btnAdd.Click += (s, e) => AddRuleFromRunning();
 
-        // 右: 実行中のプロセス
-        var btnRefresh = new Button { Text = "プロセス一覧更新", Dock = DockStyle.Bottom, Height = 30 };
-        btnRefresh.Click += (s, e) => RefreshRunningProcesses();
-        var runningGroup = new GroupBox { Text = "実行中のプロセス (ダブルクリックで追加)", Dock = DockStyle.Fill };
+        var runningGroup = new GroupBox { Text = "実行中のプロセス", Dock = DockStyle.Fill };
         runningGroup.Controls.Add(lbRunning);
-        runningGroup.Controls.Add(btnRefresh);
         lbRunning.DoubleClick += (s, e) => AddRuleFromRunning();
 
         listLayout.Controls.Add(ruleGroup, 0, 0);
         listLayout.Controls.Add(btnAdd, 1, 0);
         listLayout.Controls.Add(runningGroup, 2, 0);
 
-        // 3. Affinity設定エリア
+        // 3. Affinity詳細設定エリア (全選択・全解除ボタン追加)
         var affinityGroup = new GroupBox { Text = "Affinity詳細設定", Dock = DockStyle.Fill, Padding = new Padding(10) };
         var affinityInner = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1 };
-        affinityInner.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        affinityInner.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
+        affinityInner.RowStyles.Add(new RowStyle(SizeType.Absolute, 35)); // ボタン行
+        affinityInner.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // チェックボックス行
+        affinityInner.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));  // テキスト・更新ボタン行
+
+        var quickSelectPanel = new FlowLayoutPanel { Dock = DockStyle.Fill };
+        var btnAll = new Button { Text = "全選択", Width = 80 };
+        var btnNone = new Button { Text = "全解除 (CPU 0のみ)", Width = 130 };
+        btnAll.Click += (s, e) => SetAllCores(true);
+        btnNone.Click += (s, e) => SetAllCores(false);
+        quickSelectPanel.Controls.AddRange(new Control[] { btnAll, btnNone });
 
         var bottomAction = new FlowLayoutPanel { Dock = DockStyle.Fill };
-        btnUpdateRule.Click += (s, e) => UpdateSelectedRule();
-        bottomAction.Controls.AddRange(new Control[] {
-            new Label { Text = "適用CPU文字列:", AutoSize = true, Margin = new Padding(0, 8, 5, 0) },
-            txtCpu, btnUpdateRule
-        });
+        bottomAction.Controls.AddRange(new Control[] { new Label { Text = "適用CPU:", AutoSize = true }, txtCpu, btnUpdateRule });
 
-        affinityInner.Controls.Add(cpuPanel, 0, 0);
-        affinityInner.Controls.Add(bottomAction, 0, 1);
+        affinityInner.Controls.Add(quickSelectPanel, 0, 0);
+        affinityInner.Controls.Add(cpuPanel, 0, 1);
+        affinityInner.Controls.Add(bottomAction, 0, 2);
         affinityGroup.Controls.Add(affinityInner);
 
         mainLayout.Controls.Add(presetPanel, 0, 0);
@@ -128,6 +123,59 @@ public class ConfigForm : Form
         mainLayout.Controls.Add(affinityGroup, 0, 2);
 
         this.Controls.Add(mainLayout);
+    }
+
+    // --- 新規ロジック：全選択・全解除 ---
+    private void SetAllCores(bool all)
+    {
+        isUpdating = true;
+        if (all)
+        {
+            foreach (var cb in cpuCheckBoxes) cb.Checked = true;
+        }
+        else
+        {
+            foreach (var cb in cpuCheckBoxes) cb.Checked = false;
+            if (cpuCheckBoxes.Count > 0) cpuCheckBoxes[0].Checked = true; // CPU 0のみ残す
+        }
+        isUpdating = false;
+        UpdateTextFromChecks();
+    }
+
+    private void InitializeCpuCheckBoxes()
+    {
+        cpuPanel.Controls.Clear();
+        cpuCheckBoxes.Clear();
+        for (int i = 0; i < Environment.ProcessorCount; i++)
+        {
+            var cb = new CheckBox { Text = $"CPU {i}", Width = 70, Tag = i };
+            cb.CheckedChanged += (s, e) => UpdateTextFromChecks();
+            cpuCheckBoxes.Add(cb);
+            cpuPanel.Controls.Add(cb);
+        }
+    }
+
+    // --- 新規ロジック：削除時の初期化 ---
+    private void RemoveRuleAndResetAffinity()
+    {
+        if (lbRules.SelectedItem == null) return;
+        string line = lbRules.SelectedItem.ToString()!;
+        string name = line.Split('=')[0].Trim();
+
+        // 1. Affinityを全コア開放 (OSデフォルト) に戻す
+        long allMask = (1L << Environment.ProcessorCount) - 1;
+        var processes = Process.GetProcessesByName(name);
+        foreach (var p in processes)
+        {
+            try { p.ProcessorAffinity = (IntPtr)allMask; } catch { }
+        }
+
+        // 2. ファイルから削除
+        var lines = File.ReadAllLines(configPath).Where(l => l != line).ToList();
+        File.WriteAllLines(configPath, lines);
+
+        RefreshRules();
+        MessageBox.Show($"{name} のルールを削除し、Affinityを全コア開放に戻しました。");
     }
 
     // --- ロジック：正規化と比較 ---
@@ -236,18 +284,6 @@ public class ConfigForm : Form
         }
     }
 
-    private void InitializeCpuCheckBoxes()
-    {
-        cpuPanel.Controls.Clear();
-        for (int i = 0; i < Environment.ProcessorCount; i++)
-        {
-            var cb = new CheckBox { Text = $"CPU {i}", Width = 70, Tag = i };
-            cb.CheckedChanged += (s, e) => UpdateTextFromChecks();
-            cpuCheckBoxes.Add(cb);
-            cpuPanel.Controls.Add(cb);
-        }
-    }
-
     private void UpdateTextFromChecks()
     {
         if (isUpdating) return;
@@ -261,7 +297,8 @@ public class ConfigForm : Form
     {
         if (isUpdating) return;
         isUpdating = true;
-        var cores = NormalizeAffinity(txtCpu.Text).Split(',').Select(s => int.TryParse(s, out int v) ? v : -1).ToHashSet();
+        var cores = NormalizeAffinity(txtCpu.Text).Split(',')
+                        .Select(s => int.TryParse(s, out int v) ? v : -1).ToHashSet();
         foreach (var cb in cpuCheckBoxes) cb.Checked = cores.Contains((int)cb.Tag);
         isUpdating = false;
     }
