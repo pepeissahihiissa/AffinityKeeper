@@ -11,57 +11,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Serilog;
-
-// スプラッシュ画面の定義
-public class SplashForm : Form
-{
-    private Label lblStatus;
-    private Panel pnlBackground;
-
-    public SplashForm()
-    {
-        this.Size = new Size(450, 300);
-        this.FormBorderStyle = FormBorderStyle.None;
-        this.StartPosition = FormStartPosition.CenterScreen;
-        // this.TopMost = true;
-
-        pnlBackground = new Panel { Dock = DockStyle.Fill };
-        if (File.Exists("splash.png"))
-        {
-            try { pnlBackground.BackgroundImage = Image.FromFile("splash.png"); } catch { }
-            pnlBackground.BackgroundImageLayout = ImageLayout.Stretch;
-        }
-        else
-        {
-            pnlBackground.BackColor = Color.FromArgb(45, 45, 48);
-        }
-
-        lblStatus = new Label
-        {
-            Dock = DockStyle.Bottom,
-            Height = 30,
-            ForeColor = Color.White,
-            BackColor = Color.FromArgb(30, 0, 0, 0),
-            TextAlign = ContentAlignment.MiddleCenter,
-            Font = new Font("Segoe UI", 10, FontStyle.Bold),
-            Text = "Initializing..."
-        };
-
-        pnlBackground.Controls.Add(lblStatus);
-        this.Controls.Add(pnlBackground);
-    }
-
-    public void UpdateStatus(string text)
-    {
-        if (this.InvokeRequired)
-        {
-            this.Invoke(new Action(() => UpdateStatus(text)));
-            return;
-        }
-        lblStatus.Text = text;
-        lblStatus.Refresh();
-    }
-}
+using AffinityKeeper.Models;
+using AffinityKeeper.Views;
 
 static class Program
 {
@@ -130,7 +81,8 @@ static class Program
     {
         if (splashForm == null) return;
 
-        // 1. 設定ロード
+            // 1. 設定ロード
+            // splashForm
         splashForm.UpdateStatus("設定ファイルを読み込み中...");
         await Task.Run(() => LoadRules());
 
@@ -148,7 +100,7 @@ static class Program
 
     // --- ロジック部分の実装 ---
 
-    private static void LoadRules()
+    public static void LoadRules()
     {
         string path = "affinity.ini";
         rules.Clear();
@@ -162,33 +114,12 @@ static class Program
             if (parts.Length != 2) continue;
 
             string exe = parts[0].Trim().Replace(".exe", "");
-            long mask = CpuListToMask(parts[1].Trim());
+            long mask = AffinityEngine.CpuListToMask(parts[1].Trim());
             rules[exe] = mask;
         }
     }
 
-    private static long CpuListToMask(string text)
-    {
-        long mask = 0;
-        try
-        {
-            foreach (var part in text.Split(','))
-            {
-                string p = part.Trim();
-                if (p.Contains("-"))
-                {
-                    var range = p.Split('-');
-                    int start = int.Parse(range[0]);
-                    int end = int.Parse(range[1]);
-                    for (int i = start; i <= end; i++) mask |= 1L << i;
-                }
-                else { mask |= 1L << int.Parse(p); }
-            }
-        }
-        catch { }
-        return mask;
-    }
-
+    /*
     private static void ApplyToExistingProcesses()
     {
         var allProcesses = Process.GetProcesses().ToList();
@@ -218,12 +149,46 @@ static class Program
                         if (trackedPids.TryGetValue(ppid, out long mask))
                         {
                             lock (trackedPids) { trackedPids[p.Id] = mask; }
-                            ApplyAffinity(p, mask);
+                            AffinityEngine.ApplyAffinity(p, mask);
                         }
                     }
                 }
             }
             catch { }
+        }
+    }
+    */
+
+    private static void ApplyToExistingProcesses()
+    {
+        var allProcesses = Process.GetProcesses().ToList();
+
+        // 1. 親子関係マップを一括作成 (ここが高速化の鍵)
+        var parentMap = AffinityEngine.GetParentProcessMap();
+
+        // 2. 直接マッチするものを先に処理
+        foreach (var p in allProcesses)
+        {
+            if (rules.TryGetValue(p.ProcessName, out long mask))
+            {
+                lock (trackedPids) { trackedPids[p.Id] = mask; }
+                AffinityEngine.ApplyAffinity(p, mask);
+            }
+        }
+
+        // 3. 親から継承するものを処理 (メモリ上のマップを参照するだけなので爆速)
+        foreach (var p in allProcesses)
+        {
+            if (trackedPids.ContainsKey(p.Id)) continue;
+
+            if (parentMap.TryGetValue(p.Id, out int ppid))
+            {
+                if (trackedPids.TryGetValue(ppid, out long mask))
+                {
+                    lock (trackedPids) { trackedPids[p.Id] = mask; }
+                    AffinityEngine.ApplyAffinity(p, mask);
+                }
+            }
         }
     }
 
@@ -235,35 +200,48 @@ static class Program
         {
             try
             {
-                string name = e.NewEvent["ProcessName"].ToString().Replace(".exe", "");
+                string rawName = e.NewEvent["ProcessName"].ToString() ?? "";
+                // .exeを消して比較用に正規化
+                string name = rawName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                              ? rawName.Substring(0, rawName.Length - 4)
+                              : rawName;
+
                 int pid = Convert.ToInt32(e.NewEvent["ProcessID"]);
                 int ppid = Convert.ToInt32(e.NewEvent["ParentProcessID"]);
 
-                if (rules.TryGetValue(name, out long mask) || trackedPids.TryGetValue(ppid, out mask))
+                long mask = 0;
+                bool shouldApply = false;
+
+                // 1. 直接ルールにマッチするか？
+                if (rules.TryGetValue(name, out mask))
+                {
+                    shouldApply = true;
+                }
+                // 2. 親が管理対象か？
+                else if (trackedPids.TryGetValue(ppid, out mask))
+                {
+                    shouldApply = true;
+                }
+
+                if (shouldApply)
                 {
                     lock (trackedPids) { trackedPids[pid] = mask; }
-                    Thread.Sleep(300); // 起動直後の安定待ち
-                    var p = Process.GetProcessById(pid);
-                    ApplyAffinity(p, mask);
+
+                    // 起動直後はプロセスハンドルが取れないことがあるためリトライ
+                    Task.Run(() => {
+                        Thread.Sleep(500);
+                        try
+                        {
+                            var p = Process.GetProcessById(pid);
+                            AffinityEngine.ApplyAffinity(p, mask);
+                        }
+                        catch { /* プロセスがすぐ終了した場合など */ }
+                    });
                 }
             }
-            catch { }
+            catch (Exception ex) { Log.Error(ex, "Watcher Error"); }
         };
         processWatcher.Start();
-    }
-
-    private static void ApplyAffinity(Process p, long mask)
-    {
-        try
-        {
-            p.ProcessorAffinity = (IntPtr)mask;
-            Log.Information("Applied 0x{Mask:X} to {ProcessName} (PID: {Pid})", mask, p.ProcessName, p.Id);
-        }
-        catch (Exception ex)
-        {
-            if (!p.ProcessName.Equals("dwm", StringComparison.OrdinalIgnoreCase))
-                Log.Warning("Failed to apply affinity to {ProcessName}: {Message}", p.ProcessName, ex.Message);
-        }
     }
 
     // --- UI制御 ---

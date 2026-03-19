@@ -1,4 +1,4 @@
-namespace AffinityKeeper;
+namespace AffinityKeeper.Views;
 
 using System;
 using System.Collections.Generic;
@@ -9,7 +9,11 @@ using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using Serilog;
+using AffinityKeeper.Models;
 
+/// <summary>
+/// 設定画面のUI
+/// </summary>
 public class ConfigForm : Form
 {
     // UIコンポーネント
@@ -29,9 +33,9 @@ public class ConfigForm : Form
 
     public ConfigForm()
     {
-        this.Text = "Affinity Keeper Settings (Profile Mode)";
-        this.Size = new Size(1000, 750);
-        this.MinimumSize = new Size(800, 600);
+        Text = "Affinity Keeper Settings (Profile Mode)";
+        Size = new Size(1000, 750);
+        MinimumSize = new Size(800, 600);
 
         if (!Directory.Exists(presetsDir)) Directory.CreateDirectory(presetsDir);
 
@@ -48,7 +52,7 @@ public class ConfigForm : Form
 
         lbRules.SelectedIndexChanged += (s, e) => {
             OnRuleSelected();
-            btnUpdateRule.Enabled = (lbRules.SelectedItem != null);
+            btnUpdateRule.Enabled = lbRules.SelectedItem != null;
         };
 
         // 初期ロード
@@ -57,6 +61,9 @@ public class ConfigForm : Form
         RefreshRunningProcesses();
     }
 
+    /// <summary>
+    /// UI初期配置
+    /// </summary>
     private void InitializeMainLayout()
     {
         var mainLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1 };
@@ -113,6 +120,8 @@ public class ConfigForm : Form
         var bottomAction = new FlowLayoutPanel { Dock = DockStyle.Fill };
         bottomAction.Controls.AddRange(new Control[] { new Label { Text = "適用CPU:", AutoSize = true }, txtCpu, btnUpdateRule });
 
+        btnUpdateRule.Click += (s, e) => UpdateSelectedRule();
+
         affinityInner.Controls.Add(quickSelectPanel, 0, 0);
         affinityInner.Controls.Add(cpuPanel, 0, 1);
         affinityInner.Controls.Add(bottomAction, 0, 2);
@@ -122,10 +131,14 @@ public class ConfigForm : Form
         mainLayout.Controls.Add(listLayout, 0, 1);
         mainLayout.Controls.Add(affinityGroup, 0, 2);
 
-        this.Controls.Add(mainLayout);
+        Controls.Add(mainLayout);
     }
 
     // --- 新規ロジック：全選択・全解除 ---
+    /// <summary>
+    /// 全選択・全解除
+    /// </summary>
+    /// <param name="all"></param>
     private void SetAllCores(bool all)
     {
         isUpdating = true;
@@ -156,6 +169,9 @@ public class ConfigForm : Form
     }
 
     // --- 新規ロジック：削除時の初期化 ---
+    /// <summary>
+    /// 削除時に初期化する
+    /// </summary>
     private void RemoveRuleAndResetAffinity()
     {
         if (lbRules.SelectedItem == null) return;
@@ -163,23 +179,34 @@ public class ConfigForm : Form
         string name = line.Split('=')[0].Trim();
 
         // 1. Affinityを全コア開放 (OSデフォルト) に戻す
-        long allMask = (1L << Environment.ProcessorCount) - 1;
+        long allMask = AffinityEngine.GetFullMask();// (1L << Environment.ProcessorCount) - 1;
         var processes = Process.GetProcessesByName(name);
         foreach (var p in processes)
         {
-            try { p.ProcessorAffinity = (IntPtr)allMask; } catch { }
+            try { 
+                //p.ProcessorAffinity = (IntPtr)allMask;
+                AffinityEngine.ApplyAffinity(p, allMask);
+            } catch { }
+
         }
 
         // 2. ファイルから削除
         var lines = File.ReadAllLines(configPath).Where(l => l != line).ToList();
         File.WriteAllLines(configPath, lines);
 
+        // 【重要】メモリ上の辞書を更新（これをしないと監視対象に残ったままになる）
+        Program.LoadRules();
+
         RefreshRules();
         MessageBox.Show($"{name} のルールを削除し、Affinityを全コア開放に戻しました。");
     }
 
     // --- ロジック：正規化と比較 ---
-
+    /// <summary>
+    /// アフィニティの表記修正
+    /// </summary>
+    /// <param name="input"></param>
+    /// <returns></returns>
     private string NormalizeAffinity(string input)
     {
         var cores = new HashSet<int>();
@@ -196,7 +223,9 @@ public class ConfigForm : Form
         }
         return string.Join(",", cores.OrderBy(n => n));
     }
-
+    /// <summary>
+    /// 現状とプリセットの一致判定
+    /// </summary>
     private void CheckPresetMatch()
     {
         if (isUpdating) return;
@@ -330,29 +359,74 @@ public class ConfigForm : Form
     {
         if (lbRules.SelectedItem == null) return;
         var parts = lbRules.SelectedItem.ToString()!.Split('=');
-        if (parts.Length == 2) txtCpu.Text = NormalizeAffinity(parts[1]);
+        if (parts.Length == 2)
+        {//txtCpu.Text = NormalizeAffinity(parts[1]);
+            long mask = AffinityEngine.CpuListToMask(parts[1]);
+            txtCpu.Text = AffinityEngine.MaskToCpuList(mask);
+        }
     }
 
     private void AddRuleFromRunning()
     {
         if (lbRunning.SelectedItem == null) return;
         string name = lbRunning.SelectedItem.ToString()!;
+        long newMask = AffinityEngine.CpuListToMask(txtCpu.Text);
+
+        // ファイル保存
         var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
         lines.RemoveAll(l => l.StartsWith(name + "="));
-        lines.Add($"{name}={NormalizeAffinity(txtCpu.Text)}");
+        lines.Add($"{name}={txtCpu.Text}");
         File.WriteAllLines(configPath, lines);
+
+        // メモリ更新
+        Program.LoadRules();
+
+        // 【即時適用】
+        foreach (var p in Process.GetProcessesByName(name))
+        {
+            AffinityEngine.ApplyAffinity(p, newMask);
+        }
+
         RefreshRules();
     }
 
     private void UpdateSelectedRule()
     {
         if (lbRules.SelectedItem == null) return;
+
+        // 1. 名前と新しいマスクを取得
         string name = lbRules.SelectedItem.ToString()!.Split('=')[0].Trim();
+        long newMask = AffinityEngine.CpuListToMask(txtCpu.Text);
+
+        // 2. affinity.ini ファイルを更新
         var lines = File.ReadAllLines(configPath).ToList();
         for (int i = 0; i < lines.Count; i++)
-            if (lines[i].StartsWith(name + "=")) lines[i] = $"{name}={NormalizeAffinity(txtCpu.Text)}";
+        {
+            if (lines[i].StartsWith(name + "="))
+                lines[i] = $"{name}={txtCpu.Text}";
+        }
         File.WriteAllLines(configPath, lines);
+
+        // 3. メモリ上の監視用辞書を更新 (重要)
+        Program.LoadRules();
+
+        // 4. 【即時適用】現在実行中の同名プロセスすべてに新しいマスクを適用
+        var targets = Process.GetProcessesByName(name);
+        foreach (var p in targets)
+        {
+            try
+            {
+                AffinityEngine.ApplyAffinity(p, newMask);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning("即時適用失敗: {ProcessName} - {Msg}", name, ex.Message);
+            }
+        }
+
         RefreshRules();
+        lblStatus.Text = $"● {name} に新設定を即時適用しました";
+        lblStatus.ForeColor = Color.Blue;
     }
 
     private void RemoveRule()
