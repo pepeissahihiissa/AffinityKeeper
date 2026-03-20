@@ -23,6 +23,7 @@ public class ConfigForm : Form
     private ComboBox cbPresets = new ComboBox { Width = 180, DropDownStyle = ComboBoxStyle.DropDownList };
     private Label lblStatus = new Label { Text = "● 状態確認中...", ForeColor = Color.Gray, Width = 300, AutoSize = true };
     private Button btnUpdateRule = new Button { Text = "選択中のルールを更新", Width = 150, Enabled = false };
+    private Button  btnSyncFromActual = new Button { Text = "実態をメモリに反映", Visible = false };
 
     private List<CheckBox> cpuCheckBoxes = new List<CheckBox>();
     private FlowLayoutPanel cpuPanel = new FlowLayoutPanel() { Dock = DockStyle.Fill, AutoScroll = true };
@@ -30,6 +31,9 @@ public class ConfigForm : Form
     private readonly string configPath = "affinity.ini";
     private readonly string presetsDir = "presets";
     private bool isUpdating = false;
+
+    private System.Windows.Forms.Timer diffCheckTimer;
+    private bool hasAffinityMismatch = false;
 
     public ConfigForm()
     {
@@ -54,6 +58,11 @@ public class ConfigForm : Form
             OnRuleSelected();
             btnUpdateRule.Enabled = lbRules.SelectedItem != null;
         };
+
+        // Affinityチェックタイマー
+        diffCheckTimer = new System.Windows.Forms.Timer { Interval = 5000 }; // 1分間隔
+        diffCheckTimer.Tick += (s, e) => CheckAffinityMismatch();
+        diffCheckTimer.Start();
 
         // 初期ロード
         RefreshPresets();
@@ -115,7 +124,29 @@ public class ConfigForm : Form
         var btnNone = new Button { Text = "全解除 (CPU 0のみ)", Width = 130 };
         btnAll.Click += (s, e) => SetAllCores(true);
         btnNone.Click += (s, e) => SetAllCores(false);
-        quickSelectPanel.Controls.AddRange(new Control[] { btnAll, btnNone });
+
+        // 実態を反映、をクリック
+        btnSyncFromActual.Click += (s, e) => {
+            if (lbRules.SelectedItem == null) return;
+
+            string name = lbRules.SelectedItem.ToString()!.Split('=')[0].Trim();
+            var processes = Process.GetProcessesByName(name);
+            if (processes.Length == 0) return;
+
+            // 1. 実態の値を読み取る
+            long actualMask = (long)processes[0].ProcessorAffinity;
+            string cpuList = AffinityEngine.MaskToCpuList(actualMask);
+
+            // 2. UI（テキストボックス）に反映
+            txtCpu.Text = cpuList;
+
+            // 3. メモリとストレージを更新（既存の更新ロジックを再利用）
+            UpdateSelectedRule();
+
+            MessageBox.Show($"実態の設定({cpuList})をルールに上書きしました。");
+            btnSyncFromActual.Visible = false;
+        };
+        quickSelectPanel.Controls.AddRange(new Control[] { btnAll, btnNone, btnSyncFromActual });
 
         var bottomAction = new FlowLayoutPanel { Dock = DockStyle.Fill };
         bottomAction.Controls.AddRange(new Control[] { new Label { Text = "適用CPU:", AutoSize = true }, txtCpu, btnUpdateRule });
@@ -435,5 +466,66 @@ public class ConfigForm : Form
         var lines = File.ReadAllLines(configPath).Where(l => l != lbRules.SelectedItem.ToString()).ToList();
         File.WriteAllLines(configPath, lines);
         RefreshRules();
+    }
+
+    /// <summary>
+    /// メモリ上のルールと、現在のプロセスの実態に相違がないかチェックする
+    /// </summary>
+    private void CheckAffinityMismatch()
+    {
+        if (lbRules.SelectedItem == null) return;
+
+        // 現在選択中のルール名を取得
+        string name = lbRules.SelectedItem.ToString()!.Split('=')[0].Trim();
+
+        // 1. メモリ上の期待値を取得
+        if (!Program.GetRules().TryGetValue(name, out long expectedMask)) return;
+
+        // 2. 実態（実行中のプロセス）の状態を確認
+        var processes = Process.GetProcessesByName(name);
+        if (processes.Length == 0) return;
+
+        // 最初の1つのプロセスで比較
+        long actualMask = (long)processes[0].ProcessorAffinity;
+
+        if (expectedMask != actualMask)
+        {
+            // 相違あり
+            OnMismatchDetected(name, expectedMask, actualMask);
+        }
+        else
+        {
+            // 相違なし（解消された場合）
+            OnMismatchResolved();
+        }
+    }
+
+    private void OnMismatchDetected(string name, long expected, long actual)
+    {
+        hasAffinityMismatch = true;
+        lblStatus.Text = $"⚠️ 外部変更検知: {name} (期待:0x{expected:X} / 実態:0x{actual:X})";
+        lblStatus.ForeColor = Color.Red;
+
+        // ここでボタンを出現させる！
+        btnSyncFromActual.Visible = true;
+        btnSyncFromActual.Text = $"実態(0x{actual:X})を反映";
+        
+        // ここでトレイアイコンへの通知指示を出す
+        Program.NotifyMismatch(name);
+    }
+
+    private void OnMismatchResolved()
+    {
+        hasAffinityMismatch = false;
+        lblStatus.Text = "● 正常に同期中";
+        lblStatus.ForeColor = Color.Green;
+
+        // 相違がなくなったらボタンを隠す
+        btnSyncFromActual.Visible = false;
+    }
+
+    private void UpdateRuleFromActual()
+    {
+        // 実態を取得して txtCpu.Text を更新し、そのまま UpdateSelectedRule() を呼ぶフロー
     }
 }

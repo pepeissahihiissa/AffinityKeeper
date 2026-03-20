@@ -25,6 +25,9 @@ static class Program
     private static Dictionary<int, long> trackedPids = new Dictionary<int, long>();
     private static ManagementEventWatcher? processWatcher;
 
+    // 外部から rules を参照するためのゲッター
+    public static Dictionary<string, long> GetRules() => rules;
+
     [STAThread]
     static void Main()
     {
@@ -282,5 +285,20 @@ static class Program
         }
         configForm.Show();
         configForm.Activate();
+    }
+
+    /// <summary>
+    /// 相違検知時のトレイアイコン変更と通知
+    /// </summary>
+    public static void NotifyMismatch(string processName)
+    {
+        if (trayIcon == null) return;
+
+        // アイコンを警告用に変更（リソースに警告アイコンがあれば）
+        // trayIcon.Icon = SystemIcons.Warning; 
+
+        trayIcon.BalloonTipTitle = "Affinity相違検知";
+        trayIcon.BalloonTipText = $"{processName} の設定が外部で変更された可能性があります。";
+        trayIcon.ShowBalloonTip(3000);
     }
 }
